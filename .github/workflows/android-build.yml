@@ -59,6 +59,12 @@ jobs:
         # Gradle 8.5 e definido pelo wrapper do projeto (gradle/wrapper/gradle-wrapper.properties).
         run: ./gradlew assembleDebug lintDebug --no-daemon --stacktrace
 
+      - name: Print full lint report on failure
+        if: failure()
+        run: |
+          REPORT=app/build/intermediates/lint_intermediate_text_report/debug/lint-results-debug.txt
+          if [ -f "$REPORT" ]; then cat "$REPORT"; else echo "Lint text report not found"; fi
+
       - name: Verify APK was generated
         run: |
           APK_DIR=app/build/outputs/apk/debug
@@ -78,6 +84,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: lint-report
-          path: app/build/reports/lint-results-debug.*
+          path: |
+            app/build/reports/lint-results-debug.*
+            app/build/intermediates/lint_intermediate_text_report/debug/lint-results-debug.txt
           if-no-files-found: warn
           retention-days: 14
