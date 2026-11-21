@@ -2,6 +2,7 @@ package com.unixshells.devbrowser
 
 import android.annotation.SuppressLint
 import android.app.DownloadManager
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
@@ -24,6 +25,7 @@ import android.webkit.*
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.widget.PopupMenu
+import androidx.browser.customtabs.CustomTabsIntent
 import android.util.Log
 import java.net.URLEncoder
 
@@ -59,6 +61,10 @@ class MainActivity : AppCompatActivity() {
     private var isTabStripVisible = false
     private var dockMode = DockMode.BOTTOM
     private lateinit var prefs: SharedPreferences
+    private lateinit var sessionStore: SessionStore
+    // Só salva a sessao depois que a restauracao inicial foi decidida, para nunca
+    // substituir a sessao anterior por uma aba vazia no meio do startup.
+    private var persistenceEnabled = false
 
     enum class DockMode { BOTTOM, RIGHT }
 
@@ -68,6 +74,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         prefs = getSharedPreferences("devbrowser_settings", Context.MODE_PRIVATE)
+        sessionStore = SessionStore(this)
 
         findViews()
         setupWindowInsets()
@@ -82,9 +89,16 @@ class MainActivity : AppCompatActivity() {
 
         startServers()
 
-        // Create first tab
+        // Restore the tabs from the previous session, if any.
+        val restored = restoreLastSession()
+
         val intentUrl = intent?.dataString
-        tabManager.createTab(intentUrl ?: "https://www.google.com")
+        when {
+            intentUrl != null -> tabManager.createTab(intentUrl)
+            !restored -> tabManager.createTab("https://www.google.com")
+        }
+        persistenceEnabled = true
+        persistSession(async = true)
     }
 
     private fun setupWindowInsets() {
@@ -130,10 +144,15 @@ class MainActivity : AppCompatActivity() {
                 setupDownloadListener(tab.webView)
                 updateTabStrip()
             },
-            onTabListChanged = { updateTabStrip() },
+            onTabListChanged = {
+                updateTabStrip()
+                persistSession(async = true)
+            },
             onPageStarted = { url -> urlBar.setText(url) },
             onPageFinished = { url -> urlBar.setText(url) },
-            onTitleChanged = { _ -> updateTabStrip() }
+            onTitleChanged = { _ -> updateTabStrip() },
+            onSignInRequested = { url -> openSignInExternally(url) },
+            onSessionChanged = { persistSession(async = true) }
         )
 
         tabManager.updateDesktopMode(prefs.getBoolean("desktop_mode_default", true))
@@ -712,6 +731,53 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         // Apply settings that may have changed
         applySettings()
+    }
+
+    override fun onPause() {
+        // Save before the process can be killed while in background.
+        persistSession(async = false)
+        // Cookies are kept in memory and written to disk periodically; flush them now.
+        CookieManager.getInstance().flush()
+        super.onPause()
+    }
+
+    // ─── Session persistence ─────────────────────────────
+
+    /** Restaura as abas salvas. Retorna false se nao houver sessao valida. */
+    private fun restoreLastSession(): Boolean {
+        val session = sessionStore.load() ?: return false
+        return try {
+            tabManager.restoreSession(session)
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "Could not restore tab session; starting fresh", e)
+            tabManager.destroyAll()
+            false
+        }
+    }
+
+    private fun persistSession(async: Boolean) {
+        if (!persistenceEnabled || !::tabManager.isInitialized) return
+        val snapshot = tabManager.snapshot()
+        // Never overwrite a saved session with an empty one.
+        if (snapshot.tabs.isEmpty()) return
+        if (async) sessionStore.saveAsync(snapshot) else sessionStore.saveNow(snapshot)
+    }
+
+    /**
+     * Abre o login Google fora da WebView (Chrome Custom Tabs). Cookies do login ficam
+     * no navegador, e nao na WebView: o site pode exigir recarregar apos o login.
+     */
+    private fun openSignInExternally(url: String) {
+        try {
+            CustomTabsIntent.Builder().setShowTitle(true).build().launchUrl(this, Uri.parse(url))
+        } catch (e: ActivityNotFoundException) {
+            Log.w(TAG, "No browser available for Google sign-in", e)
+            Toast.makeText(
+                this,
+                "Nenhum navegador disponivel para entrar com Google.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
     }
 
     private fun applySettings() {

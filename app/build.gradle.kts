@@ -76,8 +76,13 @@ dependencies {
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
     implementation("androidx.webkit:webkit:1.9.0")
 
+    // Chrome Custom Tabs: Google sign-in is opened outside the embedded WebView
+    implementation("androidx.browser:browser:1.8.0")
+
     // NanoHTTPD for local HTTP server (serves DevTools frontend)
     implementation("org.nanohttpd:nanohttpd:2.3.1")
     implementation("org.nanohttpd:nanohttpd-websocket:2.3.1")
 
+    // Unit tests (pure Kotlin/JVM: session codec and Google sign-in URL policy)
+    testImplementation("junit:junit:4.13.2")
 }
